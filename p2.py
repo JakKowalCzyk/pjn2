@@ -1,4 +1,5 @@
 from nltk.tokenize import word_tokenize
+import http.client
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 import matplotlib.pyplot as plt
@@ -17,90 +18,30 @@ mails.head()
 mails.rename(columns={'v1': 'labels', 'v2': 'message'}, inplace=True)
 mails.head()
 
-print(mails['labels'].value_counts())
-
 mails['label'] = mails['labels'].map({'ham': 0, 'spam': 1})
-print(mails.head())
 
 mails.drop(['labels'], axis=1, inplace=True)
-print(mails.head())
 
-totalMails = 4825 + 747
-trainIndex, testIndex = list(), list()
-for i in range(mails.shape[0]):
-    if np.random.uniform(0, 1) < 0.75:
-        trainIndex += [i]
-    else:
-        testIndex += [i]
-trainData = mails.loc[trainIndex]
-testData = mails.loc[testIndex]
+trainData = mails
 
 trainData.reset_index(inplace=True)
 trainData.drop(['index'], axis=1, inplace=True)
-print(print(trainData.head()))
 
-print(trainData['label'].value_counts())
-print(testData['label'].value_counts())
-
-
-# spam_words = ' '.join(list(mails[mails['label'] == 1]['message']))
-# spam_wc = WordCloud(width = 512,height = 512).generate(spam_words)
-# plt.figure(figsize = (10, 8), facecolor = 'k')
-# plt.imshow(spam_wc)
-# plt.axis('off')
-# plt.tight_layout(pad = 0)
-# # plt.show()
-#
-# ham_words = ' '.join(list(mails[mails['label'] == 0]['message']))
-# ham_wc = WordCloud(width = 512,height = 512).generate(ham_words)
-# plt.figure(figsize = (10, 8), facecolor = 'k')
-# plt.imshow(ham_wc)
-# plt.axis('off')
-# plt.tight_layout(pad = 0)
-# plt.show()
-
-
-def process_message(message, lower_case=True, stem=True, stop_words=True, gram=2):
-    if lower_case:
-        message = message.lower()
+def process_message(message):
+    message = message.lower()
     words = word_tokenize(message)
     words = [w for w in words if len(w) > 2]
-    if gram > 1:
-        w = []
-        for i in range(len(words) - gram + 1):
-            w += [' '.join(words[i:i + gram])]
-        return w
-    if stop_words:
-        sw = stopwords.words('english')
-        words = [word for word in words if word not in sw]
-    if stem:
-        stemmer = PorterStemmer()
-        words = [stemmer.stem(word) for word in words]
-    return words
+    sw = stopwords.words('english')
+    return [word for word in words if word not in sw]
 
 
 class SpamClassifier(object):
-    def __init__(self, trainData, method='tf-idf'):
+    def __init__(self, trainData):
         self.mails, self.labels = trainData['message'], trainData['label']
-        self.method = method
 
     def train(self):
         self.calc_TF_and_IDF()
-        if self.method == 'tf-idf':
-            self.calc_TF_IDF()
-        else:
-            self.calc_prob()
-
-    def calc_prob(self):
-        self.prob_spam = dict()
-        self.prob_ham = dict()
-        for word in self.tf_spam:
-            self.prob_spam[word] = (self.tf_spam[word] + 1) / (self.spam_words + \
-                                                               len(list(self.tf_spam.keys())))
-        for word in self.tf_ham:
-            self.prob_ham[word] = (self.tf_ham[word] + 1) / (self.ham_words + \
-                                                             len(list(self.tf_ham.keys())))
-        self.prob_spam_mail, self.prob_ham_mail = self.spam_mails / self.total_mails, self.ham_mails / self.total_mails
+        self.calc_TF_IDF()
 
     def calc_TF_and_IDF(self):
         noOfMessages = self.mails.shape[0]
@@ -114,8 +55,7 @@ class SpamClassifier(object):
         self.idf_ham = dict()
         for i in range(noOfMessages):
             message_processed = process_message(self.mails[i])
-            count = list()  # To keep track of whether the word has ocured in the message or not.
-            # For IDF
+            count = list()
             for word in message_processed:
                 if self.labels[i]:
                     self.tf_spam[word] = self.tf_spam.get(word, 0) + 1
@@ -159,37 +99,66 @@ class SpamClassifier(object):
             if word in self.prob_spam:
                 pSpam += log(self.prob_spam[word])
             else:
-                if self.method == 'tf-idf':
-                    pSpam -= log(self.sum_tf_idf_spam + len(list(self.prob_spam.keys())))
-                else:
-                    pSpam -= log(self.spam_words + len(list(self.prob_spam.keys())))
+                pSpam -= log(self.sum_tf_idf_spam + len(list(self.prob_spam.keys())))
             if word in self.prob_ham:
                 pHam += log(self.prob_ham[word])
             else:
-                if self.method == 'tf-idf':
-                    pHam -= log(self.sum_tf_idf_ham + len(list(self.prob_ham.keys())))
-                else:
-                    pHam -= log(self.ham_words + len(list(self.prob_ham.keys())))
+                pHam -= log(self.sum_tf_idf_ham + len(list(self.prob_ham.keys())))
             pSpam += log(self.prob_spam_mail)
             pHam += log(self.prob_ham_mail)
         return pSpam >= pHam
 
-    def predict(self, testData):
-        result = dict()
-        for (i, message) in enumerate(testData):
-            processed_message = process_message(message)
-            result[i] = int(self.classify(processed_message))
-        return result
+def is_bad_domain(email):
+    conn = http.client.HTTPSConnection("api.apility.net")
+    headers = {
+        'x-auth-token': "0e0669ea-e517-4009-bf6e-2fc43b0c70e2",
+    }
+    conn.request("GET", "/baddomain/" + email, headers=headers)
+    res = conn.getresponse()
+    if res.code == 200:
+        return True
+    return False
 
 
-sc_tf_idf = SpamClassifier(trainData, 'tf-idf')
+def is_spam_date(hour):
+    hour_date = int(hour)
+    if 22 < hour_date < 5:
+        return True
+    return False
+
+def read_input(reg, name, field_name):
+    if not name:
+        return name
+    m = re.match(reg, name)
+    if m:
+        return name
+    else:
+        print("zly format")
+        return read_input(reg, input(field_name), field_name)
+
+sc_tf_idf = SpamClassifier(trainData)
 sc_tf_idf.train()
 
-pm = process_message('I cant pick the phone right now. Pls send a message')
-print(sc_tf_idf.classify(pm))
+print(sc_tf_idf.classify(process_message('I cant pick the phone right now. Pls send a message')))
 
-pm = process_message('Congratulations ur awarded $500 ')
-print(sc_tf_idf.classify(pm))
+print(sc_tf_idf.classify(process_message('Congratulations ur awarded $500 ')))
 
-pm = process_message('Nowa super wiadomosc')
-print(sc_tf_idf.classify(pm))
+print(sc_tf_idf.classify(process_message('Nowa super wiadomosc')))
+
+print("Podaj wiadomosc\n")
+msg = input()
+
+print("Podaj adres email nadawcy\n")
+email = read_input("[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*", input(), "Podaj adres email nadawcy\n")
+
+print("Podaj godzine odebrania wiadomosci\n")
+hour = read_input("^([01]?\d|2[0-4])$", input(), "Podaj godzine odebrania wiadomosci\n")
+
+if msg:
+    is_spam_msg = sc_tf_idf.classify(process_message(msg))
+
+if email:
+    is_bad_domain = is_bad_domain(re.search(r'(@(\w+\.*)+)', email).group(1))
+
+if hour:
+    is_bad_date = is_spam_date(hour)
