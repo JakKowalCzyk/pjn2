@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import re
 
-mails = pd.read_csv('spam.csv', encoding='latin-1')
+mails = pd.read_csv('spam.csv', encoding='latin-1', error_bad_lines=False)
 mails.head()
 
 mails.drop(['Unnamed: 2', 'Unnamed: 3', 'Unnamed: 4'], axis=1, inplace=True)
@@ -27,6 +27,7 @@ trainData = mails
 trainData.reset_index(inplace=True)
 trainData.drop(['index'], axis=1, inplace=True)
 
+
 def process_message(message):
     message = message.lower()
     words = word_tokenize(message)
@@ -38,8 +39,6 @@ def process_message(message):
 class SpamClassifier(object):
     def __init__(self, trainData):
         self.mails, self.labels = trainData['message'], trainData['label']
-
-    def train(self):
         self.calc_TF_and_IDF()
         self.calc_TF_IDF()
 
@@ -83,7 +82,6 @@ class SpamClassifier(object):
         for word in self.tf_spam:
             self.prob_spam[word] = (self.prob_spam[word] + 1) / (
                     self.sum_tf_idf_spam + len(list(self.prob_spam.keys())))
-
         for word in self.tf_ham:
             self.prob_ham[word] = (self.tf_ham[word]) * log((self.spam_mails + self.ham_mails) \
                                                             / (self.idf_spam.get(word, 0) + self.idf_ham[word]))
@@ -108,23 +106,44 @@ class SpamClassifier(object):
             pHam += log(self.prob_ham_mail)
         return pSpam >= pHam
 
-def is_bad_domain(email):
+
+def is_spam_email(email):
+    bad_email = False
+    bad_domain1 = False
+    bad_domain2 = False
+    with open('black_emails') as lines:
+        for line in lines:
+            if line == bad_email:
+                bad_email = True
+
+    domain = re.search(r'(@((\w+\.*)+))', email).group(2)
+    with open('black_domains') as lines:
+        for line in lines:
+            if line == domain:
+                bad_domain1 = True
+
     conn = http.client.HTTPSConnection("api.apility.net")
     headers = {
         'x-auth-token': "0e0669ea-e517-4009-bf6e-2fc43b0c70e2",
     }
-    conn.request("GET", "/baddomain/" + email, headers=headers)
+    conn.request("GET", "/baddomain/" + domain, headers=headers)
     res = conn.getresponse()
     if res.code == 200:
-        return True
-    return False
+        bad_domain2 = True
+
+    bad_email_list = [bad_email, bad_domain1, bad_domain2]
+
+    return sum(bad_email_list) / len(bad_email_list)
 
 
 def is_spam_date(hour):
     hour_date = int(hour)
-    if 22 < hour_date < 5:
+    if 22 < hour_date <= 24:
+        return True
+    if hour_date < 5:
         return True
     return False
+
 
 def read_input(reg, name, field_name):
     if not name:
@@ -136,8 +155,8 @@ def read_input(reg, name, field_name):
         print("zly format")
         return read_input(reg, input(field_name), field_name)
 
+
 sc_tf_idf = SpamClassifier(trainData)
-sc_tf_idf.train()
 
 print(sc_tf_idf.classify(process_message('I cant pick the phone right now. Pls send a message')))
 
@@ -145,20 +164,70 @@ print(sc_tf_idf.classify(process_message('Congratulations ur awarded $500 ')))
 
 print(sc_tf_idf.classify(process_message('Nowa super wiadomosc')))
 
-print("Podaj wiadomosc\n")
+print("Podaj wiadomosc")
 msg = input()
 
-print("Podaj adres email nadawcy\n")
-email = read_input("[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*", input(), "Podaj adres email nadawcy\n")
+print("Podaj adres email nadawcy")
+email = read_input(
+    "[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*",
+    input(), "Podaj adres email nadawcy\n")
 
-print("Podaj godzine odebrania wiadomosci\n")
+print("Podaj godzine odebrania wiadomosci")
 hour = read_input("^([01]?\d|2[0-4])$", input(), "Podaj godzine odebrania wiadomosci\n")
 
+is_spam_msg = False
+is_bad_domain = False
+is_bad_date = False
+is_bad_domain_percentege = 0
+is_bad_domain_percent = 0
 if msg:
     is_spam_msg = sc_tf_idf.classify(process_message(msg))
 
 if email:
-    is_bad_domain = is_bad_domain(re.search(r'(@(\w+\.*)+)', email).group(1))
+    is_bad_domain_percentege = is_spam_email(email)
+    if is_bad_domain_percentege == 1:
+        is_bad_domain_percent = is_bad_domain_percentege * 100
+        is_bad_domain = True
+    elif is_bad_domain_percentege == 0:
+        is_bad_domain = False
+    else:
+        is_bad_domain_percent = is_bad_domain_percentege * 100
 
 if hour:
     is_bad_date = is_spam_date(hour)
+
+can_be_spam = sum([is_spam_msg, is_bad_domain, is_bad_date]) + is_bad_domain_percentege
+if can_be_spam == 0:
+    print("Ta wiadomosc to nie spam. Żaden ze wskaźników nic nie wykrył")
+
+elif can_be_spam != 0:
+    if email and hour and msg:
+        if False not in (is_spam_msg, is_bad_domain, is_bad_date):
+            print("Ta wiadomosc to na pewno spam. Wszystkie czynniki na to wskazują")
+        elif False not in (is_spam_msg, is_bad_date) and is_bad_domain_percent > 50:
+            print("Wysokie prawdopodobieństwo, że adres należy do spamera.")
+            print("Prawdopodobienstwo spamu to: ", ((2 + is_bad_domain_percentege) / 3) * 100, "%")
+        else:
+            if not email:
+                if False not in (is_spam_msg, is_bad_date):
+                    print("To prawdopodobnie spam")
+                    print("Prawdopodobienstwo spamu to: ", (2 / 3) * 100, "%")
+                else:
+                    print("Prawdopodobienstwo spamu to: ", (((is_spam_msg + is_bad_date) / 2) * 100), "%")
+            else:
+                print("Prawdopodobienstwo spamu to: ",
+                      (((is_spam_msg + is_bad_date + is_bad_domain_percentege) / 3) * 100), "%")
+    else:
+        if not email:
+            if False not in (is_spam_msg, is_bad_date):
+                print("To prawdopodobnie spam")
+                print("Prawdopodobienstwo spamu to: ", (2 / 3) * 100, "%")
+            else:
+                print("Prawdopodobienstwo spamu to: ", ((((is_spam_msg + is_bad_date) / 2) * 100), "%"))
+        else:
+            print("Prawdopodobienstwo spamu to: ", (((is_spam_msg + is_bad_date + is_bad_domain_percentege) / 3) * 100),
+                  "%")
+
+    print("Wiadomosc oznaczona jako spam = ", "Tak" if is_spam_msg else "Nie")
+    print("Godzina oznaczona jako spam = ", "Tak" if is_bad_date else "Nie")
+    print("Prawdopodobienstwo, że adres email należy do spamera = ", is_bad_domain_percent, "%")
